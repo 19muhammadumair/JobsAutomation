@@ -1,0 +1,6 @@
+.env
+jobs.db
+scraper.log
+__pycache__/
+*.pyc
+venv/
