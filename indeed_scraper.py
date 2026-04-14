@@ -175,10 +175,15 @@ BASE_URL = "https://uk.indeed.com/jobs"
 JOB_URL_TEMPLATE = "https://uk.indeed.com/viewjob?jk={job_id}"
 
 HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://uk.indeed.com/",
+    "Cache-Control": "max-age=0",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
     "DNT": "1",
 }
 
@@ -205,8 +210,7 @@ def fetch_page(url: str) -> str | None:
     try:
         resp = cffi_requests.get(
             url,
-            headers=HEADERS,
-            impersonate="chrome",
+            impersonate="safari",
             proxies=proxy,
             timeout=30,
         )
@@ -460,16 +464,19 @@ def list_groups() -> None:
 def format_job_message(job: dict) -> str:
     """Format a single job dict into a readable WhatsApp message."""
     return (
-        f"🚨 *New Job Alert*\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📌 *Title:* {job['title']}\n"
-        f"🏢 *Company:* {job['company']}\n"
-        f"💰 *Salary:* {job['salary']}\n"
-        f"📋 *Contract:* {job['contract']}\n"
-        f"📍 *Location:* {job['location']}\n"
-        f"⏰ *Posted:* {job['deadline']}\n"
-        f"🔗 *Link:* {job['link']}\n"
-        f"━━━━━━━━━━━━━━━━━━"
+        f"🚨 Part Time JOB ALERT\n"
+        f"\n"
+        f"Role: {job['title']}\n"
+        f"Company: {job['company']}\n"
+        f"Location: {job['location']}\n"
+        f"Contract Type: {job['contract']}\n"
+        f"Type: Job whilst study\n"
+        f"\n"
+        f"👉 DEADLINE to apply:\n"
+        f"{job['deadline']}\n"
+        f"\n"
+        f"🔗 Apply here:\n"
+        f"{job['link']}"
     )
 
 

@@ -352,9 +352,43 @@ def parse_linkedin_jobs(html: str) -> list[dict]:
     return jobs
 
 
+def fetch_job_details(job: dict) -> dict:
+    """Fetch the LinkedIn job detail page to extract salary and employment type."""
+    url = job["link"]
+    html = fetch_page(url)
+    if not html:
+        return job
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # --- Salary from detail page ---
+    if job["salary"] == "Not listed":
+        sal_el = soup.find("div", class_=re.compile(r"salary compensation__salary"))
+        if not sal_el:
+            sal_el = soup.find("div", class_=re.compile(r"compensation__salary-range"))
+        if sal_el:
+            job["salary"] = sal_el.get_text(strip=True)
+            # Clean up "Base pay range" prefix
+            job["salary"] = re.sub(r"^Base pay range", "", job["salary"]).strip()
+
+    # --- Employment type from job criteria ---
+    if job["contract"] == "N/A":
+        for li in soup.find_all("li", class_=re.compile(r"description__job-criteria-item")):
+            header = li.find("h3")
+            value = li.find("span")
+            if header and value:
+                label = header.get_text(strip=True).lower()
+                if "employment type" in label:
+                    job["contract"] = value.get_text(strip=True)
+                    break
+
+    return job
+
+
 def scrape_linkedin(query: str, location: str, distance: int,
                     time_range: str, job_type: str = "",
-                    max_pages: int = 5) -> list[dict]:
+                    max_pages: int = 5,
+                    max_jobs: int = 0) -> list[dict]:
     """Scrape multiple pages of LinkedIn job results."""
     all_jobs: list[dict] = []
     for page in range(max_pages):
@@ -387,6 +421,11 @@ def scrape_linkedin(query: str, location: str, distance: int,
         if j["job_id"] not in seen:
             seen.add(j["job_id"])
             unique.append(j)
+
+    # Apply max_jobs limit if set
+    if max_jobs > 0:
+        unique = unique[:max_jobs]
+
     return unique
 
 
@@ -455,7 +494,8 @@ def notify_new_jobs(new_jobs: list[dict]) -> None:
 
 
 def run_once(query: str, location: str, distance: int,
-             time_range: str, job_type: str, max_pages: int) -> int:
+             time_range: str, job_type: str, max_pages: int,
+             max_jobs: int = 0) -> int:
     logger.info(
         "Starting LinkedIn scrape: query=%r location=%r distance=%d time_range=%r",
         query, location, distance, time_range,
@@ -463,17 +503,32 @@ def run_once(query: str, location: str, distance: int,
 
     conn = init_db(DB_PATH)
     try:
-        jobs = scrape_linkedin(query, location, distance, time_range, job_type, max_pages)
+        jobs = scrape_linkedin(query, location, distance, time_range, job_type, max_pages, max_jobs)
         logger.info("Total unique jobs scraped: %d", len(jobs))
 
         new_jobs: list[dict] = []
         for job in jobs:
             if not job_exists(conn, job["job_id"]):
-                insert_job(conn, job)
                 new_jobs.append(job)
-                logger.info("NEW: %s @ %s [%s]", job["title"], job["company"], job["job_id"])
             else:
                 logger.debug("SKIP (dup): %s [%s]", job["title"], job["job_id"])
+
+        # Enrich only NEW jobs with salary/contract from detail pages
+        if new_jobs:
+            logger.info("Enriching %d new jobs from detail pages...", len(new_jobs))
+            enriched = 0
+            for i, job in enumerate(new_jobs):
+                if job["salary"] == "Not listed" or job["contract"] == "N/A":
+                    logger.info("Fetching details [%d/%d]: %s", i + 1, len(new_jobs), job["title"])
+                    fetch_job_details(job)
+                    if job["salary"] != "Not listed" or job["contract"] != "N/A":
+                        enriched += 1
+                    time.sleep(random.uniform(2, 4))
+            logger.info("Enriched %d/%d jobs with salary/contract", enriched, len(new_jobs))
+
+        for job in new_jobs:
+            insert_job(conn, job)
+            logger.info("NEW: %s @ %s [%s]", job["title"], job["company"], job["job_id"])
 
         logger.info("New jobs this cycle: %d", len(new_jobs))
         notify_new_jobs(new_jobs)
@@ -494,6 +549,8 @@ def main() -> None:
     parser.add_argument("--job-type", "-jt", default=DEFAULT_JOB_TYPE,
                         help="Job type: parttime, fulltime, contract, temporary, internship")
     parser.add_argument("--max-pages", "-p", type=int, default=5, help="Max pages to scrape")
+    parser.add_argument("--max-jobs", "-mj", type=int, default=0,
+                        help="Max jobs to process (0 = unlimited)")
     parser.add_argument("--loop", action="store_true",
                         help="Run continuously every hour")
     args = parser.parse_args()
@@ -503,14 +560,16 @@ def main() -> None:
         while True:
             try:
                 run_once(args.query, args.location, args.distance,
-                         args.time_range, args.job_type, args.max_pages)
+                         args.time_range, args.job_type, args.max_pages,
+                         args.max_jobs)
             except Exception:
                 logger.exception("Unhandled error in scrape cycle")
             logger.info("Sleeping %ds until next cycle...", LOOP_INTERVAL)
             time.sleep(LOOP_INTERVAL)
     else:
         run_once(args.query, args.location, args.distance,
-                 args.time_range, args.job_type, args.max_pages)
+                 args.time_range, args.job_type, args.max_pages,
+                 args.max_jobs)
 
 
 if __name__ == "__main__":
