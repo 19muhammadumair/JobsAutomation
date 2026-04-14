@@ -7,12 +7,16 @@ import {
   JobsResponse,
   fetchJobs,
   fetchStats,
+  bulkDeleteJobs,
+  deleteAllJobs,
   JobFilters,
 } from "./lib/api";
 import JobCard from "./components/JobCard";
 import Filters from "./components/Filters";
 import WhatsAppPanel from "./components/WhatsAppPanel";
 import ScrapeControl from "./components/ScrapeControl";
+
+type Tab = "all" | "last";
 
 export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -22,6 +26,17 @@ export default function Home() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Tabs
+  const [activeTab, setActiveTab] = useState<Tab>("all");
+
+  // Last fetched
+  const [lastScrapeAt, setLastScrapeAt] = useState<string | null>(null);
+  const [lastFetchedJobs, setLastFetchedJobs] = useState<Job[]>([]);
+  const [lastFetchedTotal, setLastFetchedTotal] = useState(0);
+
+  // Selection
+  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set());
 
   // Filters
   const [source, setSource] = useState("");
@@ -65,6 +80,17 @@ export default function Home() {
     }
   }, [page, source, city, contract, debouncedSearch, sort]);
 
+  const loadLastFetched = useCallback(async () => {
+    if (!lastScrapeAt) return;
+    try {
+      const data = await fetchJobs({ after: lastScrapeAt, per_page: 100, sort: "newest" });
+      setLastFetchedJobs(data.jobs);
+      setLastFetchedTotal(data.total);
+    } catch {
+      // ignore
+    }
+  }, [lastScrapeAt]);
+
   const loadStats = useCallback(async () => {
     try {
       setStats(await fetchStats());
@@ -81,10 +107,57 @@ export default function Home() {
     loadStats();
   }, [loadStats]);
 
+  useEffect(() => {
+    loadLastFetched();
+  }, [loadLastFetched]);
+
   const handleDelete = (id: string) => {
     setJobs((prev) => prev.filter((j) => j.job_id !== id));
+    setLastFetchedJobs((prev) => prev.filter((j) => j.job_id !== id));
     setTotal((prev) => prev - 1);
+    setSelectedJobs((prev) => { const next = new Set(prev); next.delete(id); return next; });
     loadStats();
+  };
+
+  const handleSelect = (id: string, checked: boolean) => {
+    setSelectedJobs((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedJobs.size === displayJobs.length) {
+      setSelectedJobs(new Set());
+    } else {
+      setSelectedJobs(new Set(displayJobs.map((j) => j.job_id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedJobs.size === 0) return;
+    try {
+      await bulkDeleteJobs(Array.from(selectedJobs));
+      setJobs((prev) => prev.filter((j) => !selectedJobs.has(j.job_id)));
+      setLastFetchedJobs((prev) => prev.filter((j) => !selectedJobs.has(j.job_id)));
+      setTotal((prev) => prev - selectedJobs.size);
+      setSelectedJobs(new Set());
+      loadStats();
+    } catch { /* ignore */ }
+  };
+
+  const handleDeleteAll = async () => {
+    if (!confirm("Delete ALL jobs? This cannot be undone.")) return;
+    try {
+      await deleteAllJobs();
+      setJobs([]);
+      setLastFetchedJobs([]);
+      setTotal(0);
+      setLastFetchedTotal(0);
+      setSelectedJobs(new Set());
+      loadStats();
+    } catch { /* ignore */ }
   };
 
   const resetFilters = () => {
@@ -101,10 +174,17 @@ export default function Home() {
   const handleContractChange = (v: string) => { setContract(v); setPage(1); };
   const handleSortChange = (v: string) => { setSort(v); setPage(1); };
 
-  const refreshAll = () => {
+  const handleScrapeComplete = (scrapeTimestamp: string) => {
+    setLastScrapeAt(scrapeTimestamp);
+    setActiveTab("last");
     loadJobs();
     loadStats();
   };
+
+  // Which jobs to display based on active tab
+  const displayJobs = activeTab === "last" ? lastFetchedJobs : jobs;
+  const displayTotal = activeTab === "last" ? lastFetchedTotal : total;
+  const showPagination = activeTab === "all" && totalPages > 1;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -121,7 +201,7 @@ export default function Home() {
               </p>
             </div>
             <button
-              onClick={refreshAll}
+              onClick={() => { loadJobs(); loadStats(); }}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -151,18 +231,81 @@ export default function Home() {
               onSortChange={handleSortChange}
               onReset={resetFilters}
             />
-            <ScrapeControl onComplete={refreshAll} />
+            <ScrapeControl onComplete={handleScrapeComplete} />
             <WhatsAppPanel />
           </aside>
 
           {/* Main content */}
           <main className="flex-1 min-w-0">
+            {/* Tabs */}
+            <div className="flex items-center gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
+              <button
+                onClick={() => setActiveTab("all")}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  activeTab === "all"
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                All Jobs
+                <span className="ml-1.5 text-xs text-gray-400">({total})</span>
+              </button>
+              <button
+                onClick={() => setActiveTab("last")}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  activeTab === "last"
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Last Fetched
+                {lastScrapeAt && (
+                  <span className="ml-1.5 text-xs text-gray-400">({lastFetchedTotal})</span>
+                )}
+              </button>
+            </div>
+
+            {/* Selection toolbar */}
+            {displayJobs.length > 0 && (
+              <div className="flex items-center gap-3 mb-4 bg-white border border-gray-200 rounded-lg px-4 py-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={displayJobs.length > 0 && selectedJobs.size === displayJobs.length}
+                    onChange={handleSelectAll}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-600">
+                    {selectedJobs.size > 0 ? `${selectedJobs.size} selected` : "Select all"}
+                  </span>
+                </label>
+                {selectedJobs.size > 0 && (
+                  <button
+                    onClick={handleBulkDelete}
+                    className="ml-2 px-3 py-1 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                  >
+                    Delete Selected
+                  </button>
+                )}
+                <button
+                  onClick={handleDeleteAll}
+                  className="ml-auto px-3 py-1 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                >
+                  Delete All
+                </button>
+              </div>
+            )}
+
             {/* Results header */}
             <div className="flex items-center justify-between mb-4">
               <p className="text-sm text-gray-600">
-                {loading ? "Loading..." : `${total} job${total !== 1 ? "s" : ""} found`}
+                {loading && activeTab === "all"
+                  ? "Loading..."
+                  : activeTab === "last" && !lastScrapeAt
+                    ? "Fetch jobs to see them here"
+                    : `${displayTotal} job${displayTotal !== 1 ? "s" : ""} ${activeTab === "last" ? "from last fetch" : "found"}`}
               </p>
-              {totalPages > 1 && (
+              {showPagination && (
                 <p className="text-sm text-gray-400">
                   Page {page} of {totalPages}
                 </p>
@@ -170,7 +313,7 @@ export default function Home() {
             </div>
 
             {/* Error */}
-            {error && (
+            {error && activeTab === "all" && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
                 <p className="text-sm text-red-700">{error}</p>
                 <p className="text-xs text-red-500 mt-1">
@@ -179,27 +322,37 @@ export default function Home() {
               </div>
             )}
 
-            {/* Job grid */}
-            {!loading && jobs.length === 0 && !error ? (
+            {/* Empty state */}
+            {!loading && displayJobs.length === 0 && !error ? (
               <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
                 <svg className="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
                 </svg>
-                <p className="text-gray-500 font-medium">No jobs found</p>
+                <p className="text-gray-500 font-medium">
+                  {activeTab === "last" ? "No jobs fetched yet" : "No jobs found"}
+                </p>
                 <p className="text-sm text-gray-400 mt-1">
-                  Try changing your filters or run a scrape.
+                  {activeTab === "last"
+                    ? "Use \"Get Jobs\" to fetch new jobs — they'll appear here."
+                    : "Try changing your filters or fetch new jobs."}
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {jobs.map((job) => (
-                  <JobCard key={job.job_id} job={job} onDelete={handleDelete} />
+                {displayJobs.map((job) => (
+                  <JobCard
+                    key={job.job_id}
+                    job={job}
+                    onDelete={handleDelete}
+                    selected={selectedJobs.has(job.job_id)}
+                    onSelect={handleSelect}
+                  />
                 ))}
               </div>
             )}
 
             {/* Loading skeleton */}
-            {loading && (
+            {loading && activeTab === "all" && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <div
@@ -218,8 +371,8 @@ export default function Home() {
               </div>
             )}
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {/* Pagination (All Jobs tab only) */}
+            {showPagination && (
               <div className="flex items-center justify-center gap-2 mt-6">
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}

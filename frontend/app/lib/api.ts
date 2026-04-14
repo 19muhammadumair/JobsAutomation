@@ -59,6 +59,7 @@ export interface JobFilters {
   contract?: string;
   search?: string;
   sort?: string;
+  after?: string;
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -82,6 +83,7 @@ export function fetchJobs(filters: JobFilters = {}): Promise<JobsResponse> {
   if (filters.contract) params.set("contract", filters.contract);
   if (filters.search) params.set("search", filters.search);
   if (filters.sort) params.set("sort", filters.sort);
+  if (filters.after) params.set("after", filters.after);
   const qs = params.toString();
   return apiFetch<JobsResponse>(`/api/jobs${qs ? `?${qs}` : ""}`);
 }
@@ -97,6 +99,7 @@ export function triggerScrape(body: {
   radius?: number;
   max_pages?: number;
   max_jobs?: number;
+  job_type?: string;
 }): Promise<ScrapeResult> {
   return apiFetch<ScrapeResult>("/api/scrape", {
     method: "POST",
@@ -125,4 +128,19 @@ export function connectWhatsApp(chatId: string): Promise<{ status: string; chat_
 
 export function deleteJob(jobId: string): Promise<{ status: string }> {
   return apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+}
+
+export function bulkDeleteJobs(jobIds: string[]): Promise<{ status: string; count: number }> {
+  return apiFetch("/api/jobs/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+}
+
+export function deleteAllJobs(): Promise<{ status: string; count: number }> {
+  return apiFetch("/api/jobs", { method: "DELETE" });
+}
+
+export function disconnectWhatsApp(): Promise<{ status: string }> {
+  return apiFetch("/api/whatsapp/disconnect", { method: "POST" });
 }

@@ -10,16 +10,30 @@ const SOURCE_COLORS: Record<string, string> = {
 export default function JobCard({
   job,
   onDelete,
+  selected,
+  onSelect,
 }: {
   job: Job;
   onDelete?: (id: string) => void;
+  selected?: boolean;
+  onSelect?: (id: string, checked: boolean) => void;
 }) {
   const badge = SOURCE_COLORS[job.source] || "bg-gray-500";
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
+    <div className={`bg-white rounded-xl shadow-sm border p-5 flex flex-col gap-3 hover:shadow-md transition-shadow ${
+      selected ? "border-blue-400 ring-2 ring-blue-100" : "border-gray-200"
+    }`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
+        {onSelect && (
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={(e) => onSelect(job.job_id, e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0 cursor-pointer"
+          />
+        )}
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-gray-900 text-base leading-tight truncate">
             {job.title}

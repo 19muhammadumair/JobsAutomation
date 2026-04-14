@@ -159,6 +159,26 @@ const server = http.createServer(async (req, res) => {
       return jsonResponse(res, 200, { qr: currentQR, state: clientState });
     }
 
+    // --- POST /disconnect ---
+    if (req.method === "POST" && req.url === "/disconnect") {
+      try {
+        await client.logout();
+        isReady = false;
+        clientState = "disconnected";
+        currentQR = null;
+        console.log("[WhatsApp] Logged out. Will show QR on next initialize.");
+        // Re-initialize to get a new QR code
+        setTimeout(() => {
+          clientState = "initializing";
+          client.initialize();
+        }, 2000);
+        return jsonResponse(res, 200, { status: "disconnected" });
+      } catch (err) {
+        console.error("[WhatsApp] Disconnect error:", err.message);
+        return jsonResponse(res, 500, { error: err.message });
+      }
+    }
+
     // --- 404 ---
     jsonResponse(res, 404, { error: "Not found" });
   } catch (err) {

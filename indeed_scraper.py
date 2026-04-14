@@ -45,7 +45,7 @@ DEFAULT_JOB_TYPE = ""      # e.g. "parttime", "fulltime", or "" for all
 # --- WhatsApp via whatsapp-web.js (self-hosted, open-source) ---
 # Start the service:  node whatsapp_service.js
 # Scan the QR code in the terminal on first run.
-WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3001")
+WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3002")
 #
 # WHATSAPP_CHAT_ID — individual or group:
 #   Individual : 447751988524@c.us        (country code + number, no +)
@@ -508,7 +508,8 @@ def notify_new_jobs(new_jobs: list[dict]) -> None:
 
 
 def run_once(query: str, location: str, radius: int,
-             fromage: int, job_type: str, max_pages: int) -> int:
+             fromage: int, job_type: str, max_pages: int,
+             max_jobs: int = 0) -> int:
     """Execute one scraping cycle. Returns count of new jobs found."""
     logger.info(
         "Starting scrape: query=%r location=%r radius=%d fromage=%d",
@@ -526,6 +527,9 @@ def run_once(query: str, location: str, radius: int,
                 insert_job(conn, job)
                 new_jobs.append(job)
                 logger.info("NEW: %s @ %s [%s]", job["title"], job["company"], job["job_id"])
+                if max_jobs > 0 and len(new_jobs) >= max_jobs:
+                    logger.info("Reached max_jobs limit of %d", max_jobs)
+                    break
             else:
                 logger.debug("SKIP (dup): %s [%s]", job["title"], job["job_id"])
 
@@ -546,6 +550,8 @@ def main() -> None:
     parser.add_argument("--job-type", "-jt", default=DEFAULT_JOB_TYPE,
                         help="Job type filter (parttime, fulltime, contract, etc.)")
     parser.add_argument("--max-pages", "-p", type=int, default=5, help="Max pages to scrape")
+    parser.add_argument("--max-jobs", "-mj", type=int, default=0,
+                        help="Max new jobs to collect (0 = unlimited)")
     parser.add_argument("--loop", action="store_true",
                         help="Run continuously every hour")
     parser.add_argument("--list-groups", action="store_true",
@@ -561,14 +567,16 @@ def main() -> None:
         while True:
             try:
                 run_once(args.query, args.location, args.radius,
-                         args.fromage, args.job_type, args.max_pages)
+                         args.fromage, args.job_type, args.max_pages,
+                         args.max_jobs)
             except Exception:
                 logger.exception("Unhandled error in scrape cycle")
             logger.info("Sleeping %ds until next cycle...", LOOP_INTERVAL)
             time.sleep(LOOP_INTERVAL)
     else:
         run_once(args.query, args.location, args.radius,
-                 args.fromage, args.job_type, args.max_pages)
+                 args.fromage, args.job_type, args.max_pages,
+                 args.max_jobs)
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ DEFAULT_TIME_RANGE = "day"  # day, week, month, any
 DEFAULT_JOB_TYPE = ""       # F=Full-time, P=Part-time, C=Contract, T=Temporary, etc.
 
 # --- WhatsApp via whatsapp-web.js ---
-WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3001")
+WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3002")
 WHATSAPP_CHAT_ID = os.getenv("WHATSAPP_CHAT_ID", "")
 
 # --- Residential Proxies ---
@@ -510,6 +510,9 @@ def run_once(query: str, location: str, distance: int,
         for job in jobs:
             if not job_exists(conn, job["job_id"]):
                 new_jobs.append(job)
+                if max_jobs > 0 and len(new_jobs) >= max_jobs:
+                    logger.info("Reached max_jobs limit of %d", max_jobs)
+                    break
             else:
                 logger.debug("SKIP (dup): %s [%s]", job["title"], job["job_id"])
 

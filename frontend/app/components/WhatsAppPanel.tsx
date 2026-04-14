@@ -8,6 +8,7 @@ import {
   fetchWhatsAppGroups,
   fetchWhatsAppQR,
   connectWhatsApp,
+  disconnectWhatsApp,
 } from "../lib/api";
 
 export default function WhatsAppPanel() {
@@ -49,13 +50,21 @@ export default function WhatsAppPanel() {
     }
   }, [groups.length]);
 
+  const state = status?.state || "offline";
+
   useEffect(() => {
     pollStatus();
-    pollRef.current = setInterval(pollStatus, 3000);
+    // Only poll when not ready — stop once connected
+    if (state !== "ready") {
+      pollRef.current = setInterval(pollStatus, 3000);
+    }
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
-  }, [pollStatus]);
+  }, [pollStatus, state]);
 
   const loadGroups = async () => {
     setLoading(true);
@@ -85,8 +94,6 @@ export default function WhatsAppPanel() {
       setError(e instanceof Error ? e.message : "Failed to connect");
     }
   };
-
-  const state = status?.state || "offline";
 
   const stateLabel: Record<string, string> = {
     offline: "Service Offline",
@@ -241,6 +248,23 @@ export default function WhatsAppPanel() {
                 className="w-full px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
               >
                 {loading ? "Refreshing..." : "↻ Refresh group list"}
+              </button>
+              <button
+                onClick={async () => {
+                  setError("");
+                  setSuccess("");
+                  try {
+                    await disconnectWhatsApp();
+                    setStatus({ connected: false, chat_id: "", state: "initializing" });
+                    setGroups([]);
+                    setQrDataUrl(null);
+                  } catch (e: unknown) {
+                    setError(e instanceof Error ? e.message : "Failed to disconnect");
+                  }
+                }}
+                className="w-full px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+              >
+                Disconnect WhatsApp
               </button>
             </div>
           )}

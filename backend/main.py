@@ -21,7 +21,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "..", "jobs.db"))
-WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3001")
+WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3002")
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +88,9 @@ class ScrapeRequest(BaseModel):
     query: str = "part time"
     location: str = "Leeds"
     radius: int = 25
-    max_pages: int = 1
+    max_pages: int = 5
     max_jobs: int = 0
+    job_type: str = ""  # parttime, fulltime, contract, temporary, internship
 
 
 class ScrapeStatus(BaseModel):
@@ -178,6 +179,7 @@ def list_jobs(
     contract: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     sort: str = Query("newest", description="newest or oldest"),
+    after: Optional[str] = Query(None, description="ISO timestamp — only return jobs scraped after this time"),
 ):
     conn = get_db()
     try:
@@ -200,6 +202,10 @@ def list_jobs(
         if search:
             conditions.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ?)")
             params.extend([f"%{search.lower()}%", f"%{search.lower()}%"])
+
+        if after:
+            conditions.append("scraped_at >= ?")
+            params.append(after)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         order = "DESC" if sort == "newest" else "ASC"
@@ -283,13 +289,19 @@ def trigger_scrape(req: ScrapeRequest):
 
     if req.source in ("indeed", "both"):
         try:
+            # Indeed has ~15 jobs/page, compute pages from limit
+            pages = max(1, (req.max_jobs + 14) // 15) if req.max_jobs > 0 else req.max_pages
             cmd = [
                 venv_python, os.path.join(project_dir, "indeed_scraper.py"),
                 "--query", req.query,
                 "--location", req.location,
                 "--radius", str(req.radius),
-                "--max-pages", str(req.max_pages),
+                "--max-pages", str(pages),
             ]
+            if req.job_type:
+                cmd.extend(["--job-type", req.job_type])
+            if req.max_jobs > 0:
+                cmd.extend(["--max-jobs", str(req.max_jobs)])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=project_dir)
             # Parse new jobs count from output
             for line in result.stdout.split("\n"):
@@ -307,13 +319,17 @@ def trigger_scrape(req: ScrapeRequest):
 
     if req.source in ("linkedin", "both"):
         try:
+            # LinkedIn has 25 jobs/page
+            pages = max(1, (req.max_jobs + 24) // 25) if req.max_jobs > 0 else req.max_pages
             cmd = [
                 venv_python, os.path.join(project_dir, "linkedin_scraper.py"),
                 "--query", req.query,
                 "--location", req.location,
                 "--distance", str(req.radius),
-                "--max-pages", str(req.max_pages),
+                "--max-pages", str(pages),
             ]
+            if req.job_type:
+                cmd.extend(["--job-type", req.job_type])
             if req.max_jobs > 0:
                 cmd.extend(["--max-jobs", str(req.max_jobs)])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=project_dir)
@@ -414,3 +430,41 @@ def delete_job(job_id: str):
         return {"status": "deleted", "job_id": job_id}
     finally:
         conn.close()
+
+
+class BulkDeleteRequest(BaseModel):
+    job_ids: list[str]
+
+
+@app.post("/api/jobs/bulk-delete")
+def bulk_delete_jobs(req: BulkDeleteRequest):
+    conn = get_db()
+    try:
+        placeholders = ",".join("?" for _ in req.job_ids)
+        conn.execute(f"DELETE FROM jobs WHERE job_id IN ({placeholders})", req.job_ids)
+        conn.commit()
+        return {"status": "deleted", "count": len(req.job_ids)}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/jobs")
+def delete_all_jobs():
+    conn = get_db()
+    try:
+        cursor = conn.execute("DELETE FROM jobs")
+        conn.commit()
+        return {"status": "deleted", "count": cursor.rowcount}
+    finally:
+        conn.close()
+
+
+@app.post("/api/whatsapp/disconnect")
+def whatsapp_disconnect():
+    """Disconnect WhatsApp and force re-authentication."""
+    import httpx
+    try:
+        resp = httpx.post(f"{WA_SERVICE_URL}/disconnect", timeout=15)
+        return resp.json()
+    except Exception:
+        return {"status": "error", "message": "Could not reach WhatsApp service"}
