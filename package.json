@@ -1,0 +1,13 @@
+{
+  "name": "whatsapp-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight WhatsApp Web bridge for the job scraper",
+  "scripts": {
+    "start": "node whatsapp_service.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.26.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

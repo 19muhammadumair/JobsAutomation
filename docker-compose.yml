@@ -1,0 +1,12 @@
+services:
+  whatsapp:
+    build: .
+    container_name: whatsapp-service
+    ports:
+      - "3001:3001"
+    volumes:
+      - wwebjs_data:/app/.wwebjs_auth
+    restart: unless-stopped
+
+volumes:
+  wwebjs_data:

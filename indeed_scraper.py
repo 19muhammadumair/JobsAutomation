@@ -42,11 +42,18 @@ DEFAULT_RADIUS = 25        # miles
 DEFAULT_FROMAGE = 1        # 1 = last 24 hours, 7 = last week
 DEFAULT_JOB_TYPE = ""      # e.g. "parttime", "fulltime", or "" for all
 
-# --- WhatsApp / Twilio ---
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")   # e.g. whatsapp:+14155238886
-WHATSAPP_TO = os.getenv("WHATSAPP_TO", "")                     # e.g. whatsapp:+447XXXXXXXXX
+# --- WhatsApp via whatsapp-web.js (self-hosted, open-source) ---
+# Start the service:  node whatsapp_service.js
+# Scan the QR code in the terminal on first run.
+WA_SERVICE_URL = os.getenv("WA_SERVICE_URL", "http://localhost:3001")
+#
+# WHATSAPP_CHAT_ID — individual or group:
+#   Individual : 447751988524@c.us        (country code + number, no +)
+#   Group      : 120363012345678901@g.us   (group ID ending in @g.us)
+#
+# To find your group chat ID run:  python indeed_scraper.py --list-groups
+#
+WHATSAPP_CHAT_ID = os.getenv("WHATSAPP_CHAT_ID", "")
 
 # --- Residential Proxies (rotate per request) ---
 # Format in .env:  PROXY_LIST=host:port:user:pass,host2:port2:user2:pass2
@@ -168,10 +175,15 @@ BASE_URL = "https://uk.indeed.com/jobs"
 JOB_URL_TEMPLATE = "https://uk.indeed.com/viewjob?jk={job_id}"
 
 HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://uk.indeed.com/",
+    "Cache-Control": "max-age=0",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
     "DNT": "1",
 }
 
@@ -198,8 +210,7 @@ def fetch_page(url: str) -> str | None:
     try:
         resp = cffi_requests.get(
             url,
-            headers=HEADERS,
-            impersonate="chrome",
+            impersonate="safari",
             proxies=proxy,
             timeout=30,
         )
@@ -390,56 +401,82 @@ def scrape_indeed(query: str, location: str, radius: int,
 
 
 # ---------------------------------------------------------------------------
-# WhatsApp notification via Twilio
+# WhatsApp notification via whatsapp-web.js service
 # ---------------------------------------------------------------------------
 
 
 def send_whatsapp(message: str) -> bool:
-    """Send a WhatsApp message using Twilio's API."""
-    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, WHATSAPP_TO]):
-        logger.warning("Twilio credentials not configured – skipping WhatsApp send")
+    """Send a WhatsApp message via the local whatsapp-web.js service."""
+    if not WHATSAPP_CHAT_ID:
+        logger.warning("WHATSAPP_CHAT_ID not set – skipping WhatsApp send")
         return False
 
-    url = (
-        f"https://api.twilio.com/2010-04-01/"
-        f"Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-    )
-    data = {
-        "From": TWILIO_WHATSAPP_FROM,
-        "To": WHATSAPP_TO,
-        "Body": message,
+    url = f"{WA_SERVICE_URL}/send"
+    payload = {
+        "chatId": WHATSAPP_CHAT_ID,
+        "text": message,
     }
     try:
         resp = cffi_requests.post(
             url,
-            data=data,
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            json=payload,
             impersonate="chrome",
             timeout=30,
         )
-        if resp.status_code in (200, 201):
+        if resp.status_code == 200:
             logger.info("WhatsApp message sent successfully")
             return True
-        logger.warning("Twilio HTTP %d: %s", resp.status_code, resp.text[:300])
+        logger.warning("WhatsApp service HTTP %d: %s", resp.status_code, resp.text[:300])
         return False
     except Exception:
-        logger.exception("Failed to send WhatsApp message")
+        logger.exception("Failed to send WhatsApp message. Is the service running? (node whatsapp_service.js)")
         return False
+
+
+def list_groups() -> None:
+    """Print all WhatsApp groups and their chat IDs."""
+    url = f"{WA_SERVICE_URL}/groups"
+    try:
+        resp = cffi_requests.get(url, impersonate="chrome", timeout=30)
+        if resp.status_code == 503:
+            print("ERROR: WhatsApp client not ready. Scan the QR code first.")
+            print("Run:  node whatsapp_service.js")
+            sys.exit(1)
+        if resp.status_code != 200:
+            print(f"ERROR: WhatsApp service returned HTTP {resp.status_code}")
+            sys.exit(1)
+        groups = resp.json()
+        if not groups:
+            print("No groups found. Make sure your WhatsApp has groups.")
+            return
+        print(f"\nFound {len(groups)} group(s):\n")
+        for g in groups:
+            name = g.get("name") or g.get("id")
+            chat_id = g.get("id", "")
+            print(f"  {name:40s}  →  {chat_id}")
+        print("\nCopy the chat ID (ending in @g.us) into WHATSAPP_CHAT_ID in your .env")
+    except Exception as e:
+        print(f"ERROR: Could not connect to WhatsApp service at {WA_SERVICE_URL}: {e}")
+        print("Start it:  node whatsapp_service.js")
+        sys.exit(1)
 
 
 def format_job_message(job: dict) -> str:
     """Format a single job dict into a readable WhatsApp message."""
     return (
-        f"🚨 *New Job Alert*\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📌 *Title:* {job['title']}\n"
-        f"🏢 *Company:* {job['company']}\n"
-        f"💰 *Salary:* {job['salary']}\n"
-        f"📋 *Contract:* {job['contract']}\n"
-        f"📍 *Location:* {job['location']}\n"
-        f"⏰ *Posted:* {job['deadline']}\n"
-        f"🔗 *Link:* {job['link']}\n"
-        f"━━━━━━━━━━━━━━━━━━"
+        f"🚨 Part Time JOB ALERT\n"
+        f"\n"
+        f"Role: {job['title']}\n"
+        f"Company: {job['company']}\n"
+        f"Location: {job['location']}\n"
+        f"Contract Type: {job['contract']}\n"
+        f"Type: Job whilst study\n"
+        f"\n"
+        f"👉 DEADLINE to apply:\n"
+        f"{job['deadline']}\n"
+        f"\n"
+        f"🔗 Apply here:\n"
+        f"{job['link']}"
     )
 
 
@@ -511,7 +548,13 @@ def main() -> None:
     parser.add_argument("--max-pages", "-p", type=int, default=5, help="Max pages to scrape")
     parser.add_argument("--loop", action="store_true",
                         help="Run continuously every hour")
+    parser.add_argument("--list-groups", action="store_true",
+                        help="Print WhatsApp groups and their chat IDs, then exit")
     args = parser.parse_args()
+
+    if args.list_groups:
+        list_groups()
+        return
 
     if args.loop:
         logger.info("Running in loop mode (interval=%ds)", LOOP_INTERVAL)

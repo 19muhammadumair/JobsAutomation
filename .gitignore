@@ -4,3 +4,5 @@ scraper.log
 __pycache__/
 *.pyc
 venv/
+node_modules/
+.wwebjs_auth/
