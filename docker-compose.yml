@@ -4,6 +4,7 @@ services:
     container_name: whatsapp-service
     ports:
       - "3001:3001"
+      - "3002:3002"
     volumes:
       - wwebjs_data:/app/.wwebjs_auth
     restart: unless-stopped

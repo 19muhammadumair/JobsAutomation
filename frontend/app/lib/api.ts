@@ -32,11 +32,17 @@ export interface Stats {
 export interface WhatsAppStatus {
   connected: boolean;
   chat_id: string;
+  state: string;
 }
 
 export interface WhatsAppGroup {
   id: string;
   name: string;
+}
+
+export interface WhatsAppQR {
+  qr: string | null;
+  state: string;
 }
 
 export interface ScrapeResult {
@@ -104,6 +110,10 @@ export function fetchWhatsAppStatus(): Promise<WhatsAppStatus> {
 
 export function fetchWhatsAppGroups(): Promise<WhatsAppGroup[]> {
   return apiFetch<WhatsAppGroup[]>("/api/whatsapp/groups");
+}
+
+export function fetchWhatsAppQR(): Promise<WhatsAppQR> {
+  return apiFetch<WhatsAppQR>("/api/whatsapp/qr");
 }
 
 export function connectWhatsApp(chatId: string): Promise<{ status: string; chat_id: string }> {

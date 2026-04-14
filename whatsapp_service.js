@@ -2,63 +2,85 @@
  * WhatsApp Web.js Service
  * =======================
  * A lightweight HTTP server wrapping whatsapp-web.js.
- * Exposes two endpoints:
+ * Exposes endpoints:
  *   POST /send    — send a text message  { chatId, text }
  *   GET  /groups  — list all WhatsApp groups
+ *   GET  /status  — { ready, state }
+ *   GET  /qr      — { qr: "data:image/png;base64,..." } or { qr: null }
  *
  * Usage:
  *   npm install
  *   node whatsapp_service.js
- *   # Scan the QR code in the terminal on first run
+ *   # QR code is exposed via /qr endpoint for the web UI
  *   # Session is saved to .wwebjs_auth/ so you only scan once
  */
 
 const http = require("http");
 const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode = require("qrcode-terminal");
+const qrcodeTerminal = require("qrcode-terminal");
+const QRCode = require("qrcode");
 
-const PORT = parseInt(process.env.WA_SERVICE_PORT || "3001", 10);
+const PORT = parseInt(process.env.WA_SERVICE_PORT || "3002", 10);
 
 // --- WhatsApp Client ---
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: ".wwebjs_auth" }),
   puppeteer: {
     headless: true,
+    protocolTimeout: 120000,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      "--disable-extensions",
+      "--disable-software-rasterizer",
     ],
   },
 });
 
 let isReady = false;
+let clientState = "initializing"; // initializing | qr | authenticated | ready | disconnected
+let currentQR = null; // base64 data URL of QR code
 
-client.on("qr", (qr) => {
-  console.log("\n╔══════════════════════════════════════╗");
-  console.log("║  Scan this QR code with WhatsApp:    ║");
-  console.log("╚══════════════════════════════════════╝\n");
-  qrcode.generate(qr, { small: true });
-  console.log("\nOpen WhatsApp → Settings → Linked Devices → Link a Device\n");
+client.on("qr", async (qr) => {
+  clientState = "qr";
+  console.log("\n[WhatsApp] QR code received. Scan via web UI or terminal:\n");
+  qrcodeTerminal.generate(qr, { small: true });
+
+  // Generate base64 data URL for the web UI
+  try {
+    currentQR = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+  } catch (err) {
+    console.error("[WhatsApp] Failed to generate QR data URL:", err.message);
+    currentQR = null;
+  }
 });
 
 client.on("authenticated", () => {
+  clientState = "authenticated";
+  currentQR = null; // QR no longer needed
   console.log("[WhatsApp] Authenticated successfully");
 });
 
 client.on("auth_failure", (msg) => {
+  clientState = "disconnected";
+  currentQR = null;
   console.error("[WhatsApp] Authentication failed:", msg);
 });
 
 client.on("ready", () => {
   isReady = true;
+  clientState = "ready";
+  currentQR = null;
   console.log("[WhatsApp] Client is ready!");
   console.log(`[WhatsApp] HTTP server listening on http://localhost:${PORT}`);
 });
 
 client.on("disconnected", (reason) => {
   isReady = false;
+  clientState = "disconnected";
+  currentQR = null;
   console.warn("[WhatsApp] Disconnected:", reason);
   console.log("[WhatsApp] Attempting to reconnect...");
   client.initialize();
@@ -129,7 +151,12 @@ const server = http.createServer(async (req, res) => {
 
     // --- GET /status ---
     if (req.method === "GET" && req.url === "/status") {
-      return jsonResponse(res, 200, { ready: isReady });
+      return jsonResponse(res, 200, { ready: isReady, state: clientState });
+    }
+
+    // --- GET /qr ---
+    if (req.method === "GET" && req.url === "/qr") {
+      return jsonResponse(res, 200, { qr: currentQR, state: clientState });
     }
 
     // --- 404 ---

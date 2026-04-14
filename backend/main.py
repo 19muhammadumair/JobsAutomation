@@ -101,6 +101,7 @@ class ScrapeStatus(BaseModel):
 class WhatsAppStatus(BaseModel):
     connected: bool
     chat_id: str
+    state: str = "unknown"
 
 
 class WhatsAppConnect(BaseModel):
@@ -129,9 +130,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Job Automation API", version="1.0.0", lifespan=lifespan)
 
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -342,9 +349,25 @@ def whatsapp_status():
     try:
         resp = httpx.get(f"{WA_SERVICE_URL}/status", timeout=5)
         data = resp.json()
-        return WhatsAppStatus(connected=data.get("ready", False), chat_id=chat_id)
+        return WhatsAppStatus(
+            connected=data.get("ready", False),
+            chat_id=chat_id,
+            state=data.get("state", "unknown"),
+        )
     except Exception:
-        return WhatsAppStatus(connected=False, chat_id=chat_id)
+        return WhatsAppStatus(connected=False, chat_id=chat_id, state="offline")
+
+
+@app.get("/api/whatsapp/qr")
+def whatsapp_qr():
+    """Get the current QR code as a base64 data URL for scanning."""
+    import httpx
+    try:
+        resp = httpx.get(f"{WA_SERVICE_URL}/qr", timeout=5)
+        data = resp.json()
+        return {"qr": data.get("qr"), "state": data.get("state", "unknown")}
+    except Exception:
+        return {"qr": None, "state": "offline"}
 
 
 @app.get("/api/whatsapp/groups")
@@ -354,10 +377,10 @@ def whatsapp_groups():
     try:
         resp = httpx.get(f"{WA_SERVICE_URL}/groups", timeout=15)
         if resp.status_code == 503:
-            raise HTTPException(503, "WhatsApp not ready. Scan QR code first.")
+            return []
         return resp.json()
-    except httpx.ConnectError:
-        raise HTTPException(503, "WhatsApp service not running. Start: node whatsapp_service.js")
+    except Exception:
+        return []
 
 
 @app.post("/api/whatsapp/connect")
